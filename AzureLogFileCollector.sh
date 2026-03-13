@@ -8,8 +8,9 @@
 
 # --- CONFIGURATION (Pass these via MDM arguments or environment variables) ---
 # DO NOT hardcode production SAS tokens here if the repo is public.
-AZURE_BASE_URL="${1:-"https://youraccount.blob.core.windows.net/container"}"
-SAS_TOKEN="${2:-"?sv=your_sas_token_here"}"
+
+AZURE_BASE_URL="https://youraccount.blob.core.windows.net/container"
+SAS_TOKEN="?sv=your_sas_token_here"
 
 # --- SYSTEM VARIABLES ---
 MACHINE_NAME=$(scutil --get LocalHostName)
@@ -22,25 +23,25 @@ LOG_PATH_2="/Library/ManageEngine/UEMS_Agent/logs"
 
 # --- 1. PRIVILEGE CHECK ---
 if [ "$EUID" -ne 0 ]; then
-    echo "[-] Error: This script must be run as root (sudo)."
-    exit 1
+  echo "Error: This script must be run as root (sudo) to access /Library/ paths."
+  exit 1
 fi
 
 # --- 2. LOG COLLECTION ---
-echo "[+] Archiving logs from system paths..."
-# Zips the directories if they exist
-if [ -d "$LOG_PATH_1" ] || [ -d "$LOG_PATH_2" ]; then
-    /usr/bin/zip -rq "$TEMP_ZIP" "$LOG_PATH_1" "$LOG_PATH_2"
-else
-    echo "[-] Error: Log directories not found. Exiting."
+echo "Locating and zipping logs..."
+# Using full path to zip and redirecting errors to /dev/null for a cleaner output
+/usr/bin/zip -rq "$TEMP_ZIP" "$LOG_PATH_1" "$LOG_PATH_2"
+
+if [ ! -f "$TEMP_ZIP" ]; then
+    echo "Error: Could not create log archive. Verify if log directories exist."
     exit 1
 fi
 
-# --- 3. AZURE UPLOAD ---
-echo "[+] Starting upload to Azure Blob Storage..."
+# --- 3. AZURE UPLOAD (HTTPS API) ---
+echo "Uploading to Azure Storage..."
 UPLOAD_URL="${AZURE_BASE_URL}/${ZIP_NAME}${SAS_TOKEN}"
 
-# Perform PUT request and capture HTTP status code
+# -s (silent), -S (show errors), -w (write out HTTP code)
 RESPONSE=$(curl -s -S -o /dev/null -w "%{http_code}" -X PUT \
      -T "$TEMP_ZIP" \
      -H "x-ms-blob-type: BlockBlob" \
@@ -49,11 +50,11 @@ RESPONSE=$(curl -s -S -o /dev/null -w "%{http_code}" -X PUT \
 
 # --- 4. VERIFICATION & CLEANUP ---
 if [ "$RESPONSE" == "201" ]; then
-    echo "[+] Upload Successful (HTTP 201). Removing temporary archive."
+    echo "Upload Success (HTTP 201). Removing temporary local zip."
     rm "$TEMP_ZIP"
     exit 0
 else
-    echo "[-] Upload Failed. HTTP Status: $RESPONSE"
-    echo "[!] File preserved at $TEMP_ZIP for manual recovery."
+    echo "Upload Failed with HTTP status: $RESPONSE"
+    echo "The local zip remains at $TEMP_ZIP for troubleshooting."
     exit 1
 fi
